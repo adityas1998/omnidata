@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torchvision import transforms
-
+import cv2
 import PIL
 from PIL import Image
 import numpy as np
@@ -18,7 +18,7 @@ import pdb
 from modules.unet import UNet
 from modules.midas.dpt_depth import DPTDepthModel
 from data.transforms import get_transform
-
+from src.yolo_det import detect_humans
 
 parser = argparse.ArgumentParser(description='Visualize output for depth or surface normals')
 
@@ -41,6 +41,7 @@ os.system(f"mkdir -p {args.output_path}")
 map_location = (lambda storage, loc: storage.cuda()) if torch.cuda.is_available() else torch.device('cpu')
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
+IMG_SIZE = (384, 384)
 
 # get target task and model
 if args.task == 'normal':
@@ -74,7 +75,10 @@ if args.task == 'normal':
     trans_totensor = transforms.Compose([transforms.Resize(image_size, interpolation=PIL.Image.BILINEAR),
                                         transforms.CenterCrop(image_size),
                                         get_transform('rgb', image_size=None)])
-
+    # trans_totensor = transforms.Compose([transforms.Resize((image_size, image_size), interpolation=PIL.Image.BILINEAR),
+    #                                     # transforms.CenterCrop(image_size),
+    #                                     get_transform('rgb', image_size=None)])
+    
 elif args.task == 'depth':
     image_size = 384
     pretrained_weights_path = root_dir + 'omnidata_dpt_depth_v2.ckpt'  # 'omnidata_dpt_depth_v1.ckpt'
@@ -98,8 +102,11 @@ else:
     print("task should be one of the following: normal, depth")
     sys.exit()
 
-trans_rgb = transforms.Compose([transforms.Resize(512, interpolation=PIL.Image.BILINEAR),
-                                transforms.CenterCrop(512)])
+trans_rgb = transforms.Compose(
+    [transforms.Resize(512, interpolation=PIL.Image.BILINEAR), 
+     transforms.CenterCrop(512)
+     ]
+     )
 
 
 def standardize_depth_map(img, mask_valid=None, trunc_value=0.1):
@@ -121,6 +128,33 @@ def standardize_depth_map(img, mask_valid=None, trunc_value=0.1):
     img = (img - trunc_mean) / torch.sqrt(trunc_var + eps)
     return img
 
+def select_and_adjust_primary_bbox(human_bboxes, img, margin = 100):
+    largest_bbox = sorted(human_bboxes, key=lambda x: (x["x2"] - x["x1"])*(x["y2"] - x["y1"]), reverse= True)[0]
+    x1, y1, x2, y2 = largest_bbox["x1"],largest_bbox["y1"],largest_bbox["x2"],largest_bbox["y2"]
+    height, width = img.shape[:2]
+        
+    # Apply margin and handle boundaries
+    x1 =int(max(x1 - margin, 0))
+    y1 = int(max(y1 - margin, 0))
+    x2 = int(min(x2 + margin, width))
+    y2 = int(min(y2 + margin, height))
+    
+    # Crop the image
+    cropped_image = img[y1:y2, x1:x2]
+    return cropped_image
+    # # Calculate padding to maintain aspect ratio
+    # h, w, _ = cropped_image.shape
+    # scale = min(IMG_SIZE[0] / w, IMG_SIZE[1] / h)
+    # resized_image = cv2.resize(cropped_image, (int(w * scale), int(h * scale)))
+    
+    # # Add padding
+    # top = (IMG_SIZE[1] - resized_image.shape[0]) // 2
+    # bottom = IMG_SIZE[1] - resized_image.shape[0] - top
+    # left = (IMG_SIZE[0] - resized_image.shape[1]) // 2
+    # right = IMG_SIZE[0] - resized_image.shape[1] - left
+    
+    # padded_image = cv2.copyMakeBorder(resized_image, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+    # return padded_image
 
 def save_outputs(img_path, output_file_name):
     with torch.no_grad():
@@ -128,7 +162,12 @@ def save_outputs(img_path, output_file_name):
 
         print(f'Reading input {img_path} ...')
         img = Image.open(img_path)
+        # img = cv2.imread(img_path)[:, :, ::-1]
+        # human_bboxes = detect_humans(img)
 
+        # img = select_and_adjust_primary_bbox(human_bboxes, img)
+        img = trans_topil(img)
+        # img.save("temp/test.jpg")
         img_tensor = trans_totensor(img)[:3].unsqueeze(0).to(device)
 
         rgb_path = os.path.join(args.output_path, f'{output_file_name}_rgb.png')
