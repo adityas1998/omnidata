@@ -83,12 +83,13 @@ def detect_humans(image, conf = 0.69, human_count_thresh = 2, area_perc_thresh =
         if DEBUG:
             if human_boxes:
                 result.save(filename=f"temp/results_{img_name}.jpg")
-    largest_box_area = max([bbox["area"] for bbox in human_boxes])
     # Further filter out bounding boxes based on the relative size difference
     final_boxes = []
-    for bbox in human_boxes:
-        if bbox["area"] >= largest_box_area * (1 - size_difference_threshold):
-            final_boxes.append(bbox)
+    if human_boxes:
+        largest_box_area = max([bbox["area"] for bbox in human_boxes])
+        for bbox in human_boxes:
+            if bbox["area"] >= largest_box_area * (1 - size_difference_threshold):
+                final_boxes.append(bbox)
 
     if len(final_boxes) > human_count_thresh:
         return []
